@@ -7,8 +7,11 @@ This is a simple vehicle detection algorithm with yolo v3 tiny.
 How to run:
 1.download weight from 
 https://drive.google.com/open?id=1lD20AXtK_Sti68eXctQPdFo6O2OA9I0d
+
 2.save your test video to directory "/example/vdo.mp4"
+
 3.run VehicleDC.py
+
 
 on default it takes a piece of video and overlay the detection on the output video and saves it in the same example folder, you can also tweak it a little so that it runs detection on images.
 
