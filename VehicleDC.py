@@ -116,28 +116,77 @@ class Car_DC(object):
                     output[i, [2, 4]], 0.0, orig_img_size[1])
         return output
 
-    def cls_draw_bbox(self, output, orig_img):
+    def cls_draw_bbox(self, output, orig_img, log_file, frame_nr, imagesize, min_box_size=0.):
         """
         draw bbox to orig_img
         """
-        labels = []
-        pt_1s = []
-        pt_2s = []
+        nr_det = []
+        box_size = min_box_size * imagesize       # 目标占画面最小像素比, imagesize为画面像素数
 
-        for det in output:
-            # rectangle points
-            pt_1 = tuple(det[1:3].int())  # the left-up point
-            pt_2 = tuple(det[3:5].int())  # the right down point
-            pt_1s.append(pt_1)
-            pt_2s.append(pt_2)
+        for det in output:                        # 检测数据储存在list 'nr_det'
+            # nr_det.append(
+            #     (tuple(det[1:3].int()),
+            #      tuple(det[3:5].int()),
+            #      det[5]
+            #      ))
+            if abs((det[1] - det[3]) * (det[2] - det[4])) > box_size:
+                nr_det.append(
+                    (tuple(det[1:3].int()),
+                     tuple(det[3:5].int()),
+                     det[5]
+                     ))
 
-        color = (0, 255, 0)
-        for i, det in enumerate(output):
-            pt_1 = pt_1s[i]
-            pt_2 = pt_2s[i]
+        # for j in range(len(nr_det) - 1):          # 根据检测bounding box位置从左到右排序
+        #     for k in range(len(nr_det) - j - 1):
+        #         if nr_det[k][0][0] > nr_det[k+1][0][0]:
+        #             nr_det[k], nr_det[k+1] = nr_det[k+1], nr_det[k]
+        nr_det.sort(key=lambda v: v[0][0])          # 冒泡排序可以直接用sort简化
+
+        for i, sorted_det in enumerate(nr_det):
+            pt_1 = sorted_det[0]                   # box左上角坐标
+            pt_2 = sorted_det[1]                   # box右下角坐标
 
             # draw bounding box
-            cv2.rectangle(orig_img, pt_1, pt_2, color, thickness=2)
+            cv2.rectangle(orig_img, pt_1, pt_2, (0, 255, 0), thickness=2)
+            cv2.putText(orig_img, '%d' % i, pt_1, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 3)
+
+            x1 = int('{:.0f}'.format(pt_1[0]))     # extract x1y1 x2y2 from torch tensor format
+            y1 = int('{:.0f}'.format(pt_1[1]))
+            x2 = int('{:.0f}'.format(pt_2[0]))
+            y2 = int('{:.0f}'.format(pt_2[1]))
+            w = x2 - x1
+            h = y2 - y1
+            conf = '{:.3f}'.format(sorted_det[2])
+
+            log_file.write(  # 记录结果
+                ','.join(
+                     map(str, [int(frame_nr), '-1', x1, y1, w, h, conf, 1, 1, 1]))
+            )
+            log_file.write('\n')
+
+
+        # for i, det in enumerate(output):
+        #     pt_1 = pt_1s[i]
+        #     pt_2 = pt_2s[i]
+        #     conf = confs[i]
+        #
+        #     # draw bounding box
+        #     cv2.rectangle(orig_img, pt_1, pt_2, color, thickness=2)
+        #     cv2.putText(orig_img, '%d' % i, pt_1, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 3)
+        #
+        #     x1 = int('{:.0f}'.format(pt_1[0]))          # extract x1y1 x2y2 from torch tensor format
+        #     y1 = int('{:.0f}'.format(pt_1[1]))
+        #     x2 = int('{:.0f}'.format(pt_2[0]))
+        #     y2 = int('{:.0f}'.format(pt_2[1]))
+        #     w = x2 - x1
+        #     h = y2 - y1
+        #     conf = '{:.3f}'.format(conf)
+        #
+        #     log_file.write(  # 记录结果
+        #         ','.join(
+        #              map(str, [int(frame_nr), '-1', x1, y1, w, h, conf, 1, 1, 1]))
+        #     )
+        #     log_file.write('\n')
 
     def detect_classify(self):
         """
@@ -147,15 +196,17 @@ class Car_DC(object):
         clip1 = cv2.VideoCapture(self.vdo)
         width = int(clip1.get(cv2.CAP_PROP_FRAME_WIDTH))  # 视频的宽度
         height = int(clip1.get(cv2.CAP_PROP_FRAME_HEIGHT))  # 视频的高度
-        fps = clip1.get(cv2.CAP_PROP_FPS)  # 视频的帧率
+        fps = int(clip1.get(cv2.CAP_PROP_FPS))  # 视频的帧率
         fourcc = int(clip1.get(cv2.CAP_PROP_FOURCC))  # 视频的编码
         framenum = int(clip1.get(7))  # 视频总帧数
 
         writer = cv2.VideoWriter('example/project_output.mp4', fourcc, fps, (width, height))
         frame_id = 0
 
+        f_file = open('Detection_log/detection.txt', 'w+')  # 打开log文件准备写入 frame 和 box
+
         while clip1.isOpened():
-            if frame_id < framenum - 2:
+            if frame_id < framenum:
                 ret, frame = clip1.read()  # ret为是否读到帧画面T/F. clip为帧画面
                 print('\r', 'processing frame: %d / %d' % (frame_id, framenum), end='', flush=True)  # 打印当前处理帧ID
 
@@ -164,7 +215,6 @@ class Car_DC(object):
 
                 # vehicle detection
                 prediction = self.detector.forward(frame2det, CUDA=True)
-
 
                 # calculating scaling factor
                 # orig_img_size = list(frame.size)
@@ -179,15 +229,18 @@ class Car_DC(object):
                 # orig_img = cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2BGR)
                 # RGB => BGR
 
-                self.cls_draw_bbox(output, frame)   # 绘制bounding box
-                writer.write(frame)
+                self.cls_draw_bbox(output, frame, f_file, frame_id, (width * height), 0.004)   # 绘制bounding box， 设置最小检测阈值
 
-                # cv2.imshow('det', orig_img)
+
+                # cv2.imshow('Vid_out', frame)
+                # cv2.waitKey(int(1000/fps))
                 # cv2.waitKey()
-
+                writer.write(frame)
                 frame_id += 1
             else:
                 break
+
+        f_file.close()
 
 # -----------------------------------------------------------
 
@@ -206,5 +259,5 @@ if __name__ == '__main__':
     # ---------------------------- Car detect and classify
     args = parser.parse_args()
     # DR_model = Car_DC(src_dir=args.src_dir, dst_dir=args.dst_dir)
-    DR_model = Car_DC('example/vdo.mp4')    # vdo = string of Video address
+    DR_model = Car_DC('example/vdo.avi')    # vdo = string of Video address
     DR_model.detect_classify()
